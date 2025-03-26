@@ -1,55 +1,52 @@
-import { useState, useEffect } from 'react';
+"use client";
+import { useState, useEffect } from "react";
 
 export default function Home() {
-  const [userId, setUserId] = useState('');
-  const [status, setStatus] = useState(null); // 'no-request', 'waiting', 'matched', 'match-deleted'
+  const [inputValue, setInputValue] = useState(""); // what the user types
+  const [userId, setUserId] = useState("");         // the actual user ID we use
+  const [status, setStatus] = useState(null);
   const [matchedUserId, setMatchedUserId] = useState(null);
+  const [userLanguage, setUserLanguage] = useState("");
+  const [targetLanguage, setTargetLanguage] = useState("");
 
-  // For signup form
-  const [userLanguage, setUserLanguage] = useState('');
-  const [targetLanguage, setTargetLanguage] = useState('');
-
-  // -- 1. Mock "Sign In" with World ID
-  // We'll just let the user manually type a userId for now.
-  // In reality, you'd use World ID's SDK to fill this in automatically.
-
-  async function fetchStatus(uId) {
-    if (!uId) {
-      setStatus(null);
-      return;
-    }
-    try {
-      const res = await fetch(`/api/status?userId=${uId}`);
-      const data = await res.json();
-      if (data.error) {
-        console.error(data.error);
-        setStatus(null);
-      } else {
-        setStatus(data.status);
-        if (data.matchedUserId) {
-          setMatchedUserId(data.matchedUserId);
-        } else {
-          setMatchedUserId(null);
-        }
-      }
-    } catch (err) {
-      console.error('Error fetching status', err);
-    }
-  }
-
+  // This fetch only happens AFTER userId is set (by clicking "Sign In" below)
   useEffect(() => {
-    if (userId) {
-      fetchStatus(userId);
+    if (!userId) return; // if empty, do nothing
+
+    async function fetchStatus(uId) {
+      try {
+        const res = await fetch(`/api/status?userId=${uId}`);
+        const data = await res.json();
+        if (data.error) {
+          console.error(data.error);
+          setStatus(null);
+        } else {
+          setStatus(data.status);
+          if (data.matchedUserId) {
+            setMatchedUserId(data.matchedUserId);
+          } else {
+            setMatchedUserId(null);
+          }
+        }
+      } catch (err) {
+        console.error("Error fetching status", err);
+      }
     }
+
+    fetchStatus(userId);
   }, [userId]);
 
-  // 2. Sign Up handler
+  // Called when you click "Sign In"
+  function handleSignIn() {
+    setUserId(inputValue.trim()); // move inputValue into userId
+  }
+
   async function handleSignup() {
     if (!userId || !userLanguage || !targetLanguage) return;
     try {
-      const res = await fetch('/api/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId,
           userLanguage,
@@ -60,36 +57,39 @@ export default function Home() {
       if (data.error) {
         console.error(data.error);
       } else {
-        // Refresh status
-        fetchStatus(userId);
+        // re-fetch status
+        setStatus(null);
+        setMatchedUserId(null);
+        // We'll rely on useEffect to call fetchStatus automatically
+        setUserId(userId); // triggers re-fetch
       }
     } catch (err) {
-      console.error('Error signing up', err);
+      console.error("Error signing up", err);
     }
   }
 
-  // 3. Delete Match
   async function handleDeleteMatch() {
     try {
-      const res = await fetch('/api/delete-match', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/delete-match", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId }),
       });
       const data = await res.json();
       if (data.error) {
         console.error(data.error);
       } else {
-        // Refresh status
-        fetchStatus(userId);
+        // re-fetch status
+        setStatus(null);
+        setMatchedUserId(null);
+        setUserId(userId); // triggers re-fetch
       }
     } catch (err) {
-      console.error('Error deleting match', err);
+      console.error("Error deleting match", err);
     }
   }
 
-  // 4. UI logic
-  // If no userId, prompt the user to "log in" with a mock user ID.
+  // If userId is not yet set, show sign-in form
   if (!userId) {
     return (
       <main style={{ padding: 20 }}>
@@ -98,20 +98,23 @@ export default function Home() {
         <input
           type="text"
           placeholder="Enter your userId"
-          value={userId}
-          onChange={(e) => setUserId(e.target.value)}
+          value={inputValue}
+          onChange={(e) => setInputValue(e.target.value)}
         />
+        <button onClick={handleSignIn}>Sign In</button>
       </main>
     );
   }
 
-  // If we have userId, show status-based UI
+  // If we have a userId, show the rest of the UI
   return (
     <main style={{ padding: 20 }}>
       <h1>Penpal App</h1>
-      <p>Logged in as: <strong>{userId}</strong> (mocked)</p>
+      <p>
+        Logged in as: <strong>{userId}</strong> (mocked)
+      </p>
 
-      {status === 'no-request' && (
+      {status === "no-request" && (
         <div>
           <h2>Request a Penpal</h2>
           <input
@@ -132,14 +135,14 @@ export default function Home() {
         </div>
       )}
 
-      {status === 'waiting' && (
+      {status === "waiting" && (
         <div>
           <h2>Please wait...</h2>
           <p>We’re trying to find a suitable penpal for you.</p>
         </div>
       )}
 
-      {status === 'matched' && matchedUserId && (
+      {status === "matched" && matchedUserId && (
         <div>
           <h2>Penpal Found!</h2>
           <p>Your penpal's user ID: {matchedUserId}</p>
@@ -147,7 +150,7 @@ export default function Home() {
         </div>
       )}
 
-      {status === 'match-deleted' && (
+      {status === "match-deleted" && (
         <div>
           <h2>Match Deleted</h2>
           <p>Either you or your penpal has deleted the match. Request a new penpal?</p>
