@@ -1,4 +1,5 @@
-import { supabase } from '../../../../lib/supabaseClient';
+// penpal/lib/match.js
+import { supabase } from './supabaseClient';
 
 // Simple naive matching logic
 export async function attemptMatch() {
@@ -14,25 +15,15 @@ export async function attemptMatch() {
     return;
   }
 
-  // 2. Attempt to find pairs:
-  //    We want userA.target_language === userB.user_language
-  //    AND userB.target_language === userA.user_language
-  //    in the simplest scenario.
-  //
-  //    This naive approach is O(n^2). For an MVP, that's fine.
-
+  // 2. Attempt to find pairs
   for (let i = 0; i < requests.length; i++) {
     const userA = requests[i];
-
-    // Skip if user is already matched from a previous iteration
     if (userA.matched_user_id) continue;
 
     for (let j = i + 1; j < requests.length; j++) {
       const userB = requests[j];
-
       if (userB.matched_user_id) continue;
 
-      // Check complementary languages
       if (
         userA.target_language === userB.user_language &&
         userB.target_language === userA.user_language
@@ -48,7 +39,6 @@ export async function attemptMatch() {
           .update({ matched_user_id: userA.user_id })
           .eq('id', userB.id);
 
-        // Break out of the inner loop to move on to the next user
         break;
       }
     }
