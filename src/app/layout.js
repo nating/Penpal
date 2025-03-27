@@ -1,16 +1,17 @@
 // app/layout.js
-import './globals.css'; // make sure this imports Tailwind's styles
+import "./globals.css";
+import MiniKitProvider from "./minikit-provider";
 
 export const metadata = {
-  title: 'Penpal App',
-  description: 'Penpal matching MVP with a polished Tailwind UI',
+  title: "Penpal App - MiniKit Edition",
+  description: "Using World MiniKit to verify real users",
 };
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en" className="h-full bg-gray-100">
-      <body className="min-h-screen flex flex-col">
-        {children}
+    <html lang="en">
+      <body>
+        <MiniKitProvider>{children}</MiniKitProvider>
       </body>
     </html>
   );
