@@ -1,50 +1,56 @@
-// penpal/app/api/delete-match/route.js
-import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabaseClient';
+import { NextResponse } from "next/server";
+import { supabase } from "@/lib/supabaseClient";
 
-export async function POST(request) {
+export async function GET(req) {
   try {
-    const { userId } = await request.json();
-    if (!userId) {
-      return NextResponse.json({ error: 'Missing userId' }, { status: 400 });
+    const { searchParams } = new URL(req.url);
+    const username = searchParams.get("username");
+    if (!username) {
+      return NextResponse.json({ error: "No username" }, { status: 400 });
     }
 
-    // Find the user's request
-    const { data: userRequests, error } = await supabase
-      .from('requests')
-      .select('*')
-      .eq('user_id', userId)
+    const { data: rows, error } = await supabase
+      .from("requests")
+      .select("*")
+      .eq("user_id", username)
       .limit(1);
 
     if (error) {
       console.error(error);
-      return NextResponse.json({ error: 'Error reading DB' }, { status: 500 });
+      return NextResponse.json({ error: "DB error" }, { status: 500 });
     }
 
-    if (!userRequests || userRequests.length === 0) {
-      // no record => nothing to delete
-      return NextResponse.json({ success: true }, { status: 200 });
+    if (!rows || rows.length === 0) {
+      return NextResponse.json({ status: "no-request" });
     }
 
-    const userRequest = userRequests[0];
-
-    // if user has matched_user_id, also mark that partner's record as deleted
-    if (userRequest.matched_user_id) {
-      await supabase
-        .from('requests')
-        .update({ match_deleted: true })
-        .eq('user_id', userRequest.matched_user_id);
+    const reqData = rows[0];
+    if (reqData.match_deleted) {
+      return NextResponse.json({ status: "match-deleted" });
     }
 
-    // Mark the user’s own record as match_deleted
-    await supabase
-      .from('requests')
-      .update({ match_deleted: true })
-      .eq('id', userRequest.id);
+    if (reqData.matched_user_id) {
+      // partner might have deleted as well
+      const { data: partnerRows } = await supabase
+        .from("requests")
+        .select("*")
+        .eq("user_id", reqData.matched_user_id)
+        .limit(1);
 
-    return NextResponse.json({ success: true }, { status: 200 });
+      if (partnerRows && partnerRows.length > 0 && partnerRows[0].match_deleted) {
+        return NextResponse.json({ status: "match-deleted" });
+      }
+
+      return NextResponse.json({
+        status: "matched",
+        matchedUserId: reqData.matched_user_id,
+      });
+    }
+
+    // otherwise => waiting
+    return NextResponse.json({ status: "waiting" });
   } catch (err) {
-    console.error('delete-match POST error:', err);
-    return NextResponse.json({ error: 'Something went wrong' }, { status: 500 });
+    console.error("status route error:", err);
+    return NextResponse.json({ error: "Server error" }, { status: 500 });
   }
 }

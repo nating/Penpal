@@ -1,63 +1,56 @@
-// penpal/app/api/status/route.js
-import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabaseClient';
+import { NextResponse } from "next/server";
+import { supabase } from "@/lib/supabaseClient";
 
-export async function GET(request) {
+export async function GET(req) {
   try {
-    // Parse query params from request.url
-    const { searchParams } = new URL(request.url);
-    const userId = searchParams.get('userId');
-
-    if (!userId) {
-      return NextResponse.json({ error: 'Missing userId' }, { status: 400 });
+    const { searchParams } = new URL(req.url);
+    const username = searchParams.get("username");
+    if (!username) {
+      return NextResponse.json({ error: "No username" }, { status: 400 });
     }
 
-    // 1. Find the user's request
-    const { data: requests, error } = await supabase
-      .from('requests')
-      .select('*')
-      .eq('user_id', userId)
+    const { data: rows, error } = await supabase
+      .from("requests")
+      .select("*")
+      .eq("user_id", username)
       .limit(1);
 
     if (error) {
       console.error(error);
-      return NextResponse.json({ error: 'Error reading DB' }, { status: 500 });
+      return NextResponse.json({ error: "DB error" }, { status: 500 });
     }
 
-    if (!requests || requests.length === 0) {
-      // no record => user has not requested
-      return NextResponse.json({ status: 'no-request' }, { status: 200 });
+    if (!rows || rows.length === 0) {
+      return NextResponse.json({ status: "no-request" });
     }
 
-    const requestData = requests[0];
-
-    // If user’s match is deleted
-    if (requestData.match_deleted) {
-      return NextResponse.json({ status: 'match-deleted' }, { status: 200 });
+    const reqData = rows[0];
+    if (reqData.match_deleted) {
+      return NextResponse.json({ status: "match-deleted" });
     }
 
-    // If matched, check if partner also deleted
-    if (requestData.matched_user_id) {
-      const { data: partnerReqs } = await supabase
-        .from('requests')
-        .select('*')
-        .eq('user_id', requestData.matched_user_id)
+    if (reqData.matched_user_id) {
+      // partner might have deleted as well
+      const { data: partnerRows } = await supabase
+        .from("requests")
+        .select("*")
+        .eq("user_id", reqData.matched_user_id)
         .limit(1);
 
-      if (partnerReqs && partnerReqs.length > 0 && partnerReqs[0].match_deleted) {
-        return NextResponse.json({ status: 'match-deleted' }, { status: 200 });
+      if (partnerRows && partnerRows.length > 0 && partnerRows[0].match_deleted) {
+        return NextResponse.json({ status: "match-deleted" });
       }
 
       return NextResponse.json({
-        status: 'matched',
-        matchedUserId: requestData.matched_user_id,
+        status: "matched",
+        matchedUserId: reqData.matched_user_id,
       });
     }
 
-    // Otherwise, user has a request but no match
-    return NextResponse.json({ status: 'waiting' }, { status: 200 });
+    // otherwise => waiting
+    return NextResponse.json({ status: "waiting" });
   } catch (err) {
-    console.error('status GET error:', err);
-    return NextResponse.json({ error: 'Something went wrong' }, { status: 500 });
+    console.error("status route error:", err);
+    return NextResponse.json({ error: "Server error" }, { status: 500 });
   }
 }

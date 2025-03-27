@@ -1,43 +1,54 @@
 "use client";
 
-import { useState, useEffect, Fragment } from "react";
-import { MiniKit, VerifyCommandInput, VerificationLevel } from "@worldcoin/minikit-js";
-import { Dialog, Transition } from "@headlessui/react";
-import { ExclamationTriangleIcon } from "@heroicons/react/24/outline";
+import { useState, useEffect } from "react";
+import { MiniKit } from "@worldcoin/minikit-js";
 
 /**
- * Main Page:
- *  - Single "Request Penpal" button.
- *  - Calls MiniKit.commandsAsync.verify(...)
- *  - On success, sends finalPayload to /api/verify-and-match
- *  - That route verifies the proof, stores user in DB, attempts match
- *  - We store the user’s `nullifier_hash` as userId
- *  - Then track penpal status as usual
+ * A single-page MVP:
+ *  - If not in World App => "please open in World"
+ *  - "Sign in with wallet" => gets `username` from MiniKit.user.username
+ *  - "Request Penpal" => calls /api/request-match (upserts DB + attempts match)
+ *  - We fetch status from /api/status?username=...
+ *  - "Delete Match" => calls /api/delete-match
+ *
+ * No incognito or orb checks. We rely solely on `username` from wallet auth.
  */
 
 export default function Home() {
-  // If we want to store the user’s ID (the nullifier_hash) locally:
-  const [userId, setUserId] = useState("");
-  // penpal status, matched user, etc.
-  const [status, setStatus] = useState(null);
+  const [isChecking, setIsChecking] = useState(true);
+  const [isInstalled, setIsInstalled] = useState(false);
+
+  // Are we wallet-authed? => we have a username
+  const [isWalletAuthed, setIsWalletAuthed] = useState(false);
+  const [username, setUsername] = useState("");
+
+  // penpal states
+  const [status, setStatus] = useState(null); // "no-request", "waiting", "matched", "match-deleted"
   const [matchedUserId, setMatchedUserId] = useState(null);
 
-  // If you still want them to pick languages:
+  // user-languages
   const [userLanguage, setUserLanguage] = useState("");
   const [targetLanguage, setTargetLanguage] = useState("");
 
-  // For the "Delete Match" confirmation dialog
-  const [isDeleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
 
-  // 1. Whenever userId changes, fetch /api/status to see if matched, etc.
+  // 1) On mount => MiniKit.install(), check isInstalled
   useEffect(() => {
-    if (!userId) return;
-    fetchStatus(userId);
-  }, [userId]);
+    MiniKit.install();
+    const installed = MiniKit.isInstalled();
+    setIsInstalled(installed);
+    setIsChecking(false);
+  }, []);
 
-  async function fetchStatus(uId) {
+  // 2) Whenever `username` changes => fetch penpal status
+  useEffect(() => {
+    if (!username) return;
+    fetchStatus(username);
+  }, [username]);
+
+  async function fetchStatus(uName) {
     try {
-      const res = await fetch(`/api/status?userId=${uId}`);
+      const res = await fetch(`/api/status?username=${encodeURIComponent(uName)}`);
       const data = await res.json();
       if (data.error) {
         console.error(data.error);
@@ -45,168 +56,244 @@ export default function Home() {
         setMatchedUserId(null);
       } else {
         setStatus(data.status);
-        if (data.matchedUserId) {
-          setMatchedUserId(data.matchedUserId);
-        } else {
-          setMatchedUserId(null);
-        }
+        setMatchedUserId(data.matchedUserId || null);
       }
     } catch (err) {
-      console.error("Error fetching status:", err);
+      console.error("fetchStatus error:", err);
     }
   }
 
-  // 2. "Request a Penpal" => call minikit verify => call /api/verify-and-match
-  async function handleRequestPenpal() {
-    // Check if in the World App
-    if (!MiniKit.isInstalled()) {
-      return alert("MiniKit is not installed or not running inside the World App!");
+  // ------------------------------
+  // Sign in with wallet => get username
+  // ------------------------------
+  async function handleSignInWithWallet() {
+    setErrorMessage("");
+
+    if (!isInstalled) {
+      setErrorMessage("Please open this mini app inside the World App.");
+      return;
     }
 
     try {
-      // Prepare the incognito action input:
-      const verifyPayload = {
-        action: "penpal-match",
-        signal: "some-optional-signal",
-        verification_level: VerificationLevel.Orb, // or VerificationLevel.Device
-      };
+      // 1) get nonce from /api/nonce
+      const r = await fetch("/api/nonce"); // <== You must have a /api/nonce route for SIWE
+      const { nonce } = await r.json();
 
-      // 2a. Trigger the incognito action => user sees a drawer in the World App
-      const { finalPayload } = await MiniKit.commandsAsync.verify(verifyPayload);
+      // 2) call walletAuth
+      const { finalPayload } = await MiniKit.commandsAsync.walletAuth({
+        nonce,
+        requestId: "0",
+        statement: "Sign in to the Penpal App",
+      });
 
       if (finalPayload.status === "error") {
-        console.error("Minikit error payload:", finalPayload);
+        setErrorMessage("Wallet auth error or user canceled.");
         return;
       }
 
-      // 2b. Next, send the finalPayload + userLanguage, etc. to our backend for proof verification & matching
-      const res = await fetch("/api/verify-and-match", {
+      // 3) verify in the backend => /api/complete-siwe
+      const verifyRes = await fetch("/api/complete-siwe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payload: finalPayload, nonce }),
+      });
+      const verifyData = await verifyRes.json();
+      if (verifyData.status !== "success" || !verifyData.isValid) {
+        setErrorMessage("SIWE verification failed or invalid signature.");
+        return;
+      }
+
+      // 4) If success => read username
+      if (MiniKit.user?.username) {
+        setUsername(MiniKit.user.username);
+        setIsWalletAuthed(true);
+      } else {
+        setErrorMessage("No username found. Please set a username in the World App.");
+      }
+    } catch (err) {
+      console.error("handleSignInWithWallet error:", err);
+      setErrorMessage(String(err));
+    }
+  }
+
+  // ------------------------------
+  // Request a Penpal => /api/request-match
+  // ------------------------------
+  async function handleRequestPenpal() {
+    setErrorMessage("");
+
+    if (!isInstalled) {
+      setErrorMessage("Please open in the World App first.");
+      return;
+    }
+    if (!isWalletAuthed || !username) {
+      setErrorMessage("Please sign in with your wallet first.");
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/request-match", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          proofPayload: finalPayload,
+          username,
           userLanguage,
           targetLanguage,
         }),
       });
-
       const data = await res.json();
-      if (data.error || data.status !== 200) {
-        console.error("Error verifying or matching:", data);
+      if (data.error) {
+        setErrorMessage(`request-match error: ${JSON.stringify(data)}`);
         return;
       }
 
-      // 2c. If success, the server returns { userId: <nullifier_hash>, ... }
-      if (data.userId) {
-        setUserId(data.userId);
-      }
-      // Then our useEffect calls fetchStatus.
+      // Refresh status
+      fetchStatus(username);
     } catch (err) {
-      console.error("Error running minikit verify or calling /api/verify-and-match:", err);
+      console.error("handleRequestPenpal error:", err);
+      setErrorMessage(String(err));
     }
   }
 
-  // 3. Delete match => same as older logic
-  function onClickDeleteMatch() {
-    setDeleteModalOpen(true);
-  }
-  function cancelDelete() {
-    setDeleteModalOpen(false);
-  }
-  async function confirmDelete() {
-    setDeleteModalOpen(false);
+  // ------------------------------
+  // Delete match => /api/delete-match
+  // ------------------------------
+  async function handleDeleteMatch() {
+    setErrorMessage("");
+
     try {
       const res = await fetch("/api/delete-match", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId }),
+        body: JSON.stringify({ username }),
       });
       const data = await res.json();
       if (data.error) {
-        console.error(data.error);
-      } else {
-        // refresh status
-        fetchStatus(userId);
+        setErrorMessage(`delete-match error: ${JSON.stringify(data)}`);
+        return;
       }
+
+      // Refresh status
+      fetchStatus(username);
     } catch (err) {
-      console.error("Error deleting match:", err);
+      console.error("handleDeleteMatch error:", err);
+      setErrorMessage(String(err));
     }
   }
 
-  // ----- RENDER -----
+  // ---------- RENDER -----------
+  if (isChecking) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-100 text-gray-800">
+        Initializing MiniKit...
+      </div>
+    );
+  }
+  if (!isInstalled) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-500 text-white p-6">
+        <h2 className="text-3xl font-bold mb-4">Please Open in the World App</h2>
+        <p className="max-w-sm text-center text-white text-opacity-90">
+          We can’t detect the World App environment.
+          Please launch this mini app from inside the official World App.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-500 text-white">
       <header className="py-8 text-center">
         <h1 className="text-4xl sm:text-6xl font-extrabold drop-shadow-md mb-3">
-          Penpal App - MiniKit
+          Penpal App
         </h1>
         <p className="max-w-xl mx-auto text-white text-opacity-90 text-lg sm:text-xl">
-          Verify real users via World’s MiniKit!
+          Single action “Request Penpal.” We store & match by username.
         </p>
       </header>
 
       <main className="flex-1 flex items-center justify-center px-4 pb-8">
         <div className="w-full max-w-md bg-white text-gray-800 rounded-xl shadow-xl p-6">
-          {!userId && (
+          {errorMessage && (
+            <div className="bg-red-100 text-red-700 border border-red-300 p-3 rounded mb-4">
+              {errorMessage}
+            </div>
+          )}
+
+          {/* If not authed => sign in */}
+          {!isWalletAuthed && (
             <div>
               <h2 className="text-xl font-semibold mb-4 text-gray-800">
-                Request a Penpal
+                Sign In with Wallet
               </h2>
-
-              {/* If you want them to pick their languages */}
-              <div className="mb-4">
-                <label
-                  htmlFor="myLanguage"
-                  className="block text-sm font-medium text-gray-700 mb-1"
-                >
-                  Your language
-                </label>
-                <input
-                  id="myLanguage"
-                  type="text"
-                  placeholder="e.g. English"
-                  className="w-full border border-gray-300 rounded p-2 focus:outline-none focus:ring-2 focus:ring-purple-500"
-                  value={userLanguage}
-                  onChange={(e) => setUserLanguage(e.target.value)}
-                />
-              </div>
-              <div className="mb-4">
-                <label
-                  htmlFor="targetLanguage"
-                  className="block text-sm font-medium text-gray-700 mb-1"
-                >
-                  Penpal’s language
-                </label>
-                <input
-                  id="targetLanguage"
-                  type="text"
-                  placeholder="e.g. Spanish"
-                  className="w-full border border-gray-300 rounded p-2 focus:outline-none focus:ring-2 focus:ring-purple-500"
-                  value={targetLanguage}
-                  onChange={(e) => setTargetLanguage(e.target.value)}
-                />
-              </div>
-
+              <p className="mb-3 text-gray-600">
+                Authenticate with your World App wallet to load your username.
+              </p>
               <button
-                onClick={handleRequestPenpal}
-                className="w-full bg-purple-600 text-white py-2 px-4 rounded font-semibold hover:bg-purple-700 transition-colors"
+                onClick={handleSignInWithWallet}
+                className="w-full bg-blue-600 text-white py-2 px-4 rounded font-semibold hover:bg-blue-700 transition-colors"
               >
-                Verify &amp; Request Match
+                Sign In with Wallet
               </button>
             </div>
           )}
 
-          {userId && (
+          {/* If we have a username => show penpal UI */}
+          {isWalletAuthed && username && (
             <div>
-              <div className="mb-6 border-b border-gray-200 pb-4">
+              <div className="mb-6 border-b border-gray-200 pb-2">
                 <p className="text-gray-700 mb-1">
-                  Verified user (nullifier_hash):{" "}
-                  <strong className="font-medium text-purple-600">{userId}</strong>
-                </p>
-                <p className="text-xs text-gray-400">
-                  (Unique ID derived from your proof)
+                  Username:
+                  <br />
+                  <strong className="font-medium text-purple-600">{username}</strong>
                 </p>
               </div>
+
+              {status === "no-request" && (
+                <div>
+                  <h2 className="text-xl font-semibold mb-4 text-gray-800">
+                    Request a Penpal
+                  </h2>
+                  <div className="mb-4">
+                    <label
+                      htmlFor="myLanguage"
+                      className="block text-sm font-medium text-gray-700 mb-1"
+                    >
+                      Your language
+                    </label>
+                    <input
+                      id="myLanguage"
+                      type="text"
+                      placeholder="e.g. English"
+                      className="w-full border border-gray-300 rounded p-2 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      value={userLanguage}
+                      onChange={(e) => setUserLanguage(e.target.value)}
+                    />
+                  </div>
+                  <div className="mb-4">
+                    <label
+                      htmlFor="targetLanguage"
+                      className="block text-sm font-medium text-gray-700 mb-1"
+                    >
+                      Penpal’s language
+                    </label>
+                    <input
+                      id="targetLanguage"
+                      type="text"
+                      placeholder="e.g. Spanish"
+                      className="w-full border border-gray-300 rounded p-2 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      value={targetLanguage}
+                      onChange={(e) => setTargetLanguage(e.target.value)}
+                    />
+                  </div>
+                  <button
+                    onClick={handleRequestPenpal}
+                    className="w-full bg-purple-600 text-white py-2 px-4 rounded font-semibold hover:bg-purple-700 transition-colors"
+                  >
+                    Request Penpal
+                  </button>
+                </div>
+              )}
 
               {status === "waiting" && (
                 <div className="text-center">
@@ -214,7 +301,7 @@ export default function Home() {
                     Please wait...
                   </h2>
                   <p className="text-gray-500">
-                    Finding a suitable penpal for you.
+                    We’re finding you a suitable penpal.
                   </p>
                 </div>
               )}
@@ -225,13 +312,11 @@ export default function Home() {
                     Penpal Found!
                   </h2>
                   <p className="text-gray-700 mb-4">
-                    Your penpal&apos;s user ID:{" "}
-                    <span className="font-bold text-purple-600">
-                      {matchedUserId}
-                    </span>
+                    Your penpal’s username:{" "}
+                    <span className="font-bold text-purple-600">{matchedUserId}</span>
                   </p>
                   <button
-                    onClick={onClickDeleteMatch}
+                    onClick={handleDeleteMatch}
                     className="w-full bg-red-500 text-white py-2 px-4 rounded font-semibold hover:bg-red-600 transition-colors"
                   >
                     Delete Match
@@ -251,24 +336,7 @@ export default function Home() {
                     onClick={handleRequestPenpal}
                     className="w-full bg-purple-600 text-white py-2 px-4 rounded font-semibold hover:bg-purple-700 transition-colors"
                   >
-                    Verify &amp; Request Again
-                  </button>
-                </div>
-              )}
-
-              {status === "no-request" && (
-                <div className="text-center">
-                  <h2 className="text-xl font-semibold mb-4 text-gray-800">
-                    No Request
-                  </h2>
-                  <p className="text-gray-500 mb-4">
-                    Looks like you haven&apos;t requested a penpal yet.
-                  </p>
-                  <button
-                    onClick={handleRequestPenpal}
-                    className="w-full bg-purple-600 text-white py-2 px-4 rounded font-semibold hover:bg-purple-700 transition-colors"
-                  >
-                    Verify &amp; Request Match
+                    Request Penpal Again
                   </button>
                 </div>
               )}
@@ -280,60 +348,6 @@ export default function Home() {
       <footer className="py-4 text-center text-sm text-white/80">
         &copy; {new Date().getFullYear()} Penpal Inc.
       </footer>
-
-      {/* Confirmation dialog for "Delete Match" */}
-      <Transition appear show={isDeleteModalOpen} as={Fragment}>
-        <Dialog as="div" className="relative z-50" onClose={cancelDelete}>
-          <Transition.Child
-            as={Fragment}
-            enter="ease-out duration-150"
-            enterFrom="opacity-0"
-            enterTo="opacity-100"
-            leave="ease-in duration-100"
-            leaveFrom="opacity-100"
-            leaveTo="opacity-0"
-          >
-            <div className="fixed inset-0 bg-black/30" aria-hidden="true" />
-          </Transition.Child>
-          <div className="fixed inset-0 flex items-center justify-center p-4">
-            <Transition.Child
-              as={Fragment}
-              enter="ease-out duration-150"
-              enterFrom="opacity-0 scale-95"
-              enterTo="opacity-100 scale-100"
-              leave="ease-in duration-100"
-              leaveFrom="opacity-100 scale-100"
-              leaveTo="opacity-0 scale-95"
-            >
-              <Dialog.Panel className="w-full max-w-sm rounded-lg bg-white p-6 shadow-xl text-gray-800">
-                <div className="flex items-center mb-4">
-                  <ExclamationTriangleIcon className="h-6 w-6 text-red-500 mr-2" />
-                  <Dialog.Title className="text-lg font-medium text-gray-900">
-                    Delete Match
-                  </Dialog.Title>
-                </div>
-                <Dialog.Description className="text-gray-600 mb-6">
-                  Are you sure you want to delete this match?
-                </Dialog.Description>
-                <div className="flex justify-end space-x-3">
-                  <button
-                    onClick={cancelDelete}
-                    className="bg-gray-200 text-gray-700 px-4 py-2 rounded hover:bg-gray-300 transition-all"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={confirmDelete}
-                    className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 transition-all"
-                  >
-                    Yes, Delete
-                  </button>
-                </div>
-              </Dialog.Panel>
-            </Transition.Child>
-          </div>
-        </Dialog>
-      </Transition>
     </div>
   );
 }

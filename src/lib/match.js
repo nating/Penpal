@@ -1,21 +1,20 @@
-// penpal/lib/match.js
-import { supabase } from './supabaseClient';
+// lib/match.js
+import { supabase } from "@/lib/supabaseClient";
 
-// Simple naive matching logic
 export async function attemptMatch() {
-  // 1. Fetch all requests that are unmatched & not deleted
+  // fetch unmatched
   const { data: requests, error } = await supabase
-    .from('requests')
-    .select('*')
-    .eq('match_deleted', false)
-    .is('matched_user_id', null);
+    .from("requests")
+    .select("*")
+    .eq("match_deleted", false)
+    .is("matched_user_id", null);
 
   if (error) {
-    console.error('Error fetching requests:', error);
+    console.error("attemptMatch DB error:", error);
     return;
   }
 
-  // 2. Attempt to find pairs
+  // naive O(n^2)
   for (let i = 0; i < requests.length; i++) {
     const userA = requests[i];
     if (userA.matched_user_id) continue;
@@ -28,16 +27,16 @@ export async function attemptMatch() {
         userA.target_language === userB.user_language &&
         userB.target_language === userA.user_language
       ) {
-        // We found a match! Update in DB
+        // match them
         await supabase
-          .from('requests')
+          .from("requests")
           .update({ matched_user_id: userB.user_id })
-          .eq('id', userA.id);
+          .eq("id", userA.id);
 
         await supabase
-          .from('requests')
+          .from("requests")
           .update({ matched_user_id: userA.user_id })
-          .eq('id', userB.id);
+          .eq("id", userB.id);
 
         break;
       }
