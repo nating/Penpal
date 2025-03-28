@@ -1,9 +1,17 @@
-# ![Penpal Logo](./public/app-icon.svg)  
-**Penpal**  
-*A real-human language exchange matching app*
+<p align="center">
+  <img alt="penpal-logo" src="./public/app-icon.svg" width="200"><a/>
+</p>
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#contributing)
+<h2 align="center">Penpal<h2/>
+<p align="center">
+  <i align="center">The real-human language exchange matching app</i>
+</p>
+
+
+<p align="center">
+<a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue.svg"><a/>
+<a href="http://makeapullrequest.com"><img alt="PRs Welcome" src="https://img.shields.io/badge/pull%20requests-welcome-brightgreen.svg"><a/>
+</p>
 
 ---
 
