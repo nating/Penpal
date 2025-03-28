@@ -1,14 +1,24 @@
+// app/api/delete-match/route.js
+
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabaseClient";
 
-export async function GET(req) {
+/**
+ * Deletes a match for the given username:
+ *  - If user has a match, we mark the partner's row as match_deleted
+ *  - Then we mark user's own row as match_deleted
+ *
+ * This is called by handleDeleteMatch() in page.js.
+ */
+export async function POST(req) {
   try {
-    const { searchParams } = new URL(req.url);
-    const username = searchParams.get("username");
+    // 1) Read JSON body
+    const { username } = await req.json();
     if (!username) {
-      return NextResponse.json({ error: "No username" }, { status: 400 });
+      return NextResponse.json({ error: "No username provided" }, { status: 400 });
     }
 
+    // 2) Find the user's request row
     const { data: rows, error } = await supabase
       .from("requests")
       .select("*")
@@ -17,40 +27,33 @@ export async function GET(req) {
 
     if (error) {
       console.error(error);
-      return NextResponse.json({ error: "DB error" }, { status: 500 });
+      return NextResponse.json({ error: "Database error" }, { status: 500 });
     }
 
     if (!rows || rows.length === 0) {
-      return NextResponse.json({ status: "no-request" });
+      // No row => nothing to delete
+      return NextResponse.json({ success: true });
     }
 
-    const reqData = rows[0];
-    if (reqData.match_deleted) {
-      return NextResponse.json({ status: "match-deleted" });
-    }
+    const userRequest = rows[0];
 
-    if (reqData.matched_user_id) {
-      // partner might have deleted as well
-      const { data: partnerRows } = await supabase
+    // 3) If matched, mark the partner's row as deleted too
+    if (userRequest.matched_user_id) {
+      await supabase
         .from("requests")
-        .select("*")
-        .eq("user_id", reqData.matched_user_id)
-        .limit(1);
-
-      if (partnerRows && partnerRows.length > 0 && partnerRows[0].match_deleted) {
-        return NextResponse.json({ status: "match-deleted" });
-      }
-
-      return NextResponse.json({
-        status: "matched",
-        matchedUserId: reqData.matched_user_id,
-      });
+        .update({ match_deleted: true })
+        .eq("user_id", userRequest.matched_user_id);
     }
 
-    // otherwise => waiting
-    return NextResponse.json({ status: "waiting" });
+    // 4) Mark this user's row as deleted
+    await supabase
+      .from("requests")
+      .update({ match_deleted: true })
+      .eq("id", userRequest.id);
+
+    return NextResponse.json({ success: true });
   } catch (err) {
-    console.error("status route error:", err);
+    console.error("delete-match route error:", err);
     return NextResponse.json({ error: "Server error" }, { status: 500 });
   }
 }
