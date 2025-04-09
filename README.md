@@ -29,16 +29,6 @@ Penpal is a mini app that helps you connect with **real humans** who speak your 
 
 ---
 
-## QR Code – Scan & Go
-
-Want to jump in right now? **Scan** this QR code with your phone’s camera to open Penpal in the World app:
-
-![Penpal QR Code](./public/qr-code.png)
-
-*(Make sure you have the [World app](https://world.org/) installed. Once you scan, it’ll prompt you to open the mini app.)*
-
----
-
 ## How It Works
 
 1. **Sign In with World**  
